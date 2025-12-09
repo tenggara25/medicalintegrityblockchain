@@ -1,0 +1,90 @@
+const SPREADSHEET_ID = "YOUR_SPREADSHEET_ID";  // ambil dari URL spreadsheet
+const SHEET_NAME = "Sheet1"; // ganti jika nama sheet berbeda
+
+const HEADERS = [
+  "block_id",
+  "patient_id",
+  "clinic_name",
+  "diagnosis",
+  "treatment",
+  "tanggal",
+  "doctor",
+  "prev_hash",
+  "current_hash"
+];
+
+function doPost(e) {
+  try {
+    const body = e.postData.contents;
+    const data = JSON.parse(body);
+
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(SHEET_NAME);
+
+    const row = [
+      data.block_id,
+      data.patient_id,
+      data.clinic_name,
+      data.diagnosis,
+      data.treatment,
+      data.tanggal,
+      data.doctor,
+      data.prev_hash,
+      data.current_hash
+    ];
+
+    sheet.appendRow(row);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "success", received: data }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "error", message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  const mode = e.parameter.mode || "";
+
+  if (mode === "sheet") {
+    return getSheetDataAsJson();
+  }
+
+  // default response
+  return ContentService
+    .createTextOutput(JSON.stringify({ message: "Apps Script Web API for Blockchain" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSheetDataAsJson() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if (lastRow < 2) {
+    // hanya header atau kosong
+    return ContentService
+      .createTextOutput(JSON.stringify([]))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const dataRange = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  const values = dataRange.getValues();
+
+  const result = values.map(function (row) {
+    const obj = {};
+    for (let i = 0; i < HEADERS.length; i++) {
+      obj[HEADERS[i]] = row[i];
+    }
+    return obj;
+  });
+
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
