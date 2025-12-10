@@ -1,6 +1,6 @@
 # app.py
 from flask import Flask, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import requests
 
 from blockchain import Blockchain
@@ -11,6 +11,50 @@ app = Flask(__name__)
 # satu instance blockchain untuk seluruh app
 local_blockchain = Blockchain()
 
+# ==========================
+# Helper untuk normalisasi tanggal
+# ==========================
+
+# sesuaikan dengan zona waktu lokal, misal WIB = UTC+7
+LOCAL_TZ_OFFSET_HOURS = 7
+
+
+def normalize_tanggal_blockchain(tanggal_str: str):
+    """
+    Mengubah string tanggal dari blockchain lokal (misal '2025-12-01 09:00:00')
+    menjadi datetime aware di UTC, dengan asumsi input adalah waktu lokal
+    (misal WIB / UTC+7).
+    """
+    # format yang kita gunakan di blockchain: "YYYY-MM-DD HH:MM:SS"
+    dt_local = datetime.strptime(tanggal_str, "%Y-%m-%d %H:%M:%S")
+    # set timezone lokal
+    dt_local = dt_local.replace(tzinfo=timezone(timedelta(hours=LOCAL_TZ_OFFSET_HOURS)))
+    # konversi ke UTC
+    return dt_local.astimezone(timezone.utc)
+
+
+def normalize_tanggal_cloud(tanggal_str: str):
+    """
+    Mengubah string tanggal dari Google Sheets (misal '2025-12-01T02:00:00.000Z')
+    menjadi datetime aware di UTC.
+    """
+    # buang 'Z' di akhir dan bagian milidetik jika ada
+    # contoh: "2025-12-01T02:00:00.000Z" -> "2025-12-01T02:00:00"
+    cleaned = tanggal_str.strip()
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1]
+    if "." in cleaned:
+        cleaned = cleaned.split(".")[0]
+
+    # fromisoformat bisa parse "YYYY-MM-DDTHH:MM:SS"
+    dt_utc_naive = datetime.fromisoformat(cleaned)
+    # kita anggap ini sudah di UTC
+    return dt_utc_naive.replace(tzinfo=timezone.utc)
+
+
+# ==========================
+# ROUTES
+# ==========================
 
 @app.route("/", methods=["GET"])
 def home():
@@ -144,6 +188,8 @@ def verify_chain():
 def detect_cloud_tampering():
     """
     Membandingkan blockchain lokal dengan data pada Google Sheets.
+    Khusus field 'tanggal', dilakukan normalisasi timezone/format dulu
+    supaya tidak dianggap tampered hanya karena beda format (lokal vs UTC).
     """
     # 1. Verifikasi terlebih dulu chain lokal
     is_valid, msg = local_blockchain.is_chain_valid()
@@ -206,15 +252,30 @@ def detect_cloud_tampering():
         ]
 
         for field in fields_to_compare:
-            chain_val = str(chain_block.get(field, ""))
-            cloud_val = str(cloud_block.get(field, ""))
-            if chain_val != cloud_val:
+            chain_val = chain_block.get(field, "")
+            cloud_val = cloud_block.get(field, "")
+
+            # khusus tanggal: normalisasi dulu
+            if field == "tanggal":
+                try:
+                    dt_chain = normalize_tanggal_blockchain(str(chain_val))
+                    dt_cloud = normalize_tanggal_cloud(str(cloud_val))
+
+                    # jika kedua waktu sama (sama-sama momen yang sama), abaikan
+                    if dt_chain == dt_cloud:
+                        continue
+                except Exception:
+                    # kalau normalisasi gagal, fallback ke string biasa
+                    pass
+
+            # field umum (dan tanggal jika normalisasi gagal) → banding string
+            if str(chain_val) != str(cloud_val):
                 differences.append({
                     "block_id": block_id,
                     "type": "data_mismatch",
                     "field": field,
-                    "block_value": chain_val,
-                    "cloud_value": cloud_val
+                    "block_value": str(chain_val),
+                    "cloud_value": str(cloud_val)
                 })
 
     # 5. Cek block ekstra di cloud
